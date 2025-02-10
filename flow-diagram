@@ -1,0 +1,93 @@
+@startuml
+skinparam sequenceArrowThickness 2
+skinparam sequenceMessageAlign center
+skinparam ActorBackgroundColor LightBlue
+skinparam ParticipantBackgroundColor LightGray
+skinparam SequenceLifeLineBorderColor Black
+skinparam SequenceLifeLineBorderThickness 2
+skinparam SequenceGroupBackgroundColor LightYellow
+skinparam SequenceGroupBorderColor Black
+skinparam SequenceBoxFontColor DarkBlue
+skinparam SequenceBoxBorderColor Black
+
+autonumber
+
+actor User #LightBlue
+participant "Device Request" as DS #LightGray
+participant "Hazelcast Buffer" as HB #PaleGreen
+participant "PostgreSQL DB" as DB #LightYellow
+participant "ACS System" as ACS #LightPink
+
+== 🟢 Request Handling ==  
+User -> DS #Blue: PATCH /device/{device_id} (Pause/Unpause)  
+DS -> HB #DarkGreen: Check for existing requests  
+HB -> DS #DarkGreen: Found existing waiting request?  
+
+alt 🟠 If Waiting Request Exists (Case C2)  
+    DS -> User #Orange: 202 Accepted (Existing TrackerID)  
+else 🔵 If No Waiting Request (Case C1)  
+    DS -> HB #DarkGreen: Create new TrackerID, store request as Waiting  
+    DS -> User #Blue: 202 Accepted (New TrackerID)  
+end  
+
+== ⏳ Waiting for Additional Requests (5s Delay) ==  
+DS -> HB #DarkGreen: Wait for 5s for more requests  
+HB -> DS #DarkGreen: Collect all Waiting requests for batch processing  
+
+== 🔄 Batch Processing (After 5s) ==  
+DS -> HB #DarkGreen: Mark requests as In-Progress  
+HB -> DS #DarkGreen: Updated request statuses  
+DS -> ACS #Red: Send SPV batch request  
+ACS -> DS #Purple: TicketID for batch operation  
+
+== 🔔 ACS Callback Handling ==  
+alt ✅ If ACS Callback Received (Case C6)  
+    ACS -> DS #Purple: Callback Success  
+    DS -> ACS #Red: Perform GPV call (if Pause action)  
+    ACS -> DS #Purple: GPV Response (Index Updated)  
+    DS -> DB #Orange: Update device status & index in DB  
+    DS -> HB #DarkGreen: Remove processed requests from buffer  
+    DS -> User #Blue: 200 OK (Tracker Success)  
+else ❌ If ACS Callback Failed (Case C8)  
+    ACS -> DS #Red: Failure/Error Response  
+    DS -> DS #Red: Retry SPV/GPV call once  
+    DS -> ACS #Red: Retried Request  
+    alt ❌ If Retry Fails Again (Case C8)  
+        DS -> HB #Red: Mark all trackers as failed, remove requests  
+        DS -> User #Red: 200 OK (Tracker Failed)  
+    end  
+end  
+
+== 🔄 New Requests While In-Progress ==  
+User -> DS #Blue: PATCH /device/{device_id}  
+DS -> HB #DarkGreen: Check for existing Waiting requests  
+HB -> DS #DarkGreen: No Waiting, only In-Progress (Case C4)  
+DS -> HB #DarkGreen: Create new TrackerID for new request  
+DS -> User #Blue: 202 Accepted (New TrackerID)  
+
+== 🔁 Contradictory Requests (Pause + Unpause) ==  
+User -> DS #Blue: PATCH /device/{device_id} Unpause  
+DS -> HB #DarkGreen: Check existing Waiting Pause request  
+alt ✅ If Opposite Request Exists (Case C5)  
+    DS -> HB #DarkGreen: Remove existing Pause request  
+    DS -> User #Blue: 200 OK (Tracker Success)  
+else Process as normal  
+    DS -> HB #DarkGreen: Store Unpause request as Waiting  
+end  
+
+== 🔄 Pod Restart Resilience ==  
+alt 🔄 If Pod Restarts & Requests in Waiting (Case C9)  
+    DS -> HB #DarkGreen: Restart processing after 5s if no In-Progress  
+end  
+alt 🔄 If Pod Restarts & Requests in In-Progress (Case C10)  
+    DS -> HB #DarkGreen: Re-execute batch, reset timeout  
+end  
+
+== ⏳ Timeout Handling (1.5 min limit) ==  
+DS -> HB #Red: Track Processing Time  
+alt ❌ If 1.5 min Exceeded (Case C11)  
+    DS -> HB #Red: Mark Tracker as Failed, Remove All Requests  
+    DS -> User #Red: 200 OK (Tracker Failed)  
+end  
+
+@enduml
