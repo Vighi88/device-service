@@ -1,0 +1,29 @@
+database:
+  driverClass: org.postgresql.Driver
+  url: jdbc:postgresql://localhost:5432/postgres
+  user: postgres
+  password: admin123
+  properties:
+    charSet: UTF-8
+  maxWaitForConnection: 1s
+  validationQuery: "SELECT 1"
+  minSize: 8
+  maxSize: 32
+  checkConnectionWhileIdle: true
+  evictionInterval: 10s
+  minIdleTime: 1 minute
+
+flyway:
+  enabled: true
+  locations: ["db/migration"]
+  baselineOnMigrate: true    # Initialize schema history if missing
+  baselineVersion: "1"       # Set the baseline version to match your first migration
+
+# Server configuration
+server:
+  applicationConnectors:
+    - type: http
+      port: 8081  # Change this to an available port (e.g., 8081, 9090)
+  adminConnectors:
+    - type: http
+      port: 8082  # Optional: Change admin port if needed
